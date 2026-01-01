@@ -4,7 +4,7 @@ import { inngest } from "@/inngest/client";
 import prisma from "@/lib/db"
 import { getPullRequestDiff } from "@/module/github/lib/github";
 import { da } from "date-fns/locale";
-import { success } from "zod";
+import { canCreateReview,incrementReviewCount } from "@/module/payment/lib/subscription";
 
 export async function reviewPullRequest(owner: string, repo: string, prNumber: number) {
     try{
@@ -28,6 +28,11 @@ const repository = await prisma.repository.findFirst({
     if (!repository) {
         throw new Error("Repository not found");
     }
+    const canReview = await canCreateReview(repository.user.id, repository.id);
+    if(!canReview){
+  throw new Error("Review limit reached for this repository. Please upgrade to Pro for unlimited reviews.");
+}
+
     const githubAccount = repository.user.accounts[0];
     if (!githubAccount || !githubAccount.accessToken) {
         throw new Error("GitHub account not linked");
@@ -50,6 +55,7 @@ const repository = await prisma.repository.findFirst({
             userId: repository.userId,
     }
     });
+    await incrementReviewCount(repository.user.id, repository.id)
     return {success:true, message:`Review requested for PR #${prNumber}`
 };
 

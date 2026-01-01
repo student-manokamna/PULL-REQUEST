@@ -166,46 +166,56 @@ export const getRepoFileContents = async (
   owner: string,
   repo: string,
   path: string = ""
-): Promise<{ path: string; content: string }[]>  => {
+): Promise<{ path: string; content: string }[]> => {
   const octokit = new Octokit({ auth: token });
 
   const { data } = await octokit.rest.repos.getContent({
     owner,
     repo,
-    path
+    path,
   });
 
-  // if it is a FILE
+  // If SINGLE FILE
   if (!Array.isArray(data)) {
-    if(data.type === "file" && data.content){ 
-    return [{
-      path: data.path,
-      content: Buffer.from(data.content, "base64").toString("utf-8")
-    }];
+    if (data.type === "file" && data.content) {
+      return [
+        {
+          path: data.path,
+          content: Buffer.from(data.content, "base64").toString("utf-8"),
+        },
+      ];
+    }
+    return [];
   }
 
-  return [];
-}
-let files: { path: string; content: string }[] = [];
+  // If DIRECTORY
+  let files: { path: string; content: string }[] = [];
 
-  // if it is a DIRECTORY
   for (const item of data) {
-    if (item.type === "file" && item.content) {
-      const {data: fileData} = await octokit.rest.repos.getContent({
+    // ✅ FILE (DO NOT CHECK item.content HERE)
+    if (item.type === "file") {
+      const { data: fileData } = await octokit.rest.repos.getContent({
         owner,
-        repo, 
-        path: item.path
+        repo,
+        path: item.path,
       });
 
-      if (!Array.isArray(fileData) && fileData.type === "file" && fileData.content) {
-        if(!item.path.match(/\.(png|jpg|jpeg|gif|svg|ico|pdf|zip|docx?|xlsx?|pptx?|mp3|mp4|mov|avi|wmv|flv|mkv)$/i)){
-          files.push({
-            path: item.path,
-            content: Buffer.from(fileData.content, "base64").toString("utf-8")
-          });
-        }
+      if (
+        !Array.isArray(fileData) &&
+        fileData.type === "file" &&
+        fileData.content &&
+        !item.path.match(
+          /\.(png|jpg|jpeg|gif|svg|ico|pdf|zip|docx?|xlsx?|pptx?|mp3|mp4|mov|avi|wmv|flv|mkv)$/i
+        )
+      ) {
+        files.push({
+          path: item.path,
+          content: Buffer.from(fileData.content, "base64").toString("utf-8"),
+        });
       }
     }
+
+    // ✅ DIRECTORY → recurse
     else if (item.type === "dir") {
       const subDirFiles = await getRepoFileContents(
         token,
@@ -219,6 +229,7 @@ let files: { path: string; content: string }[] = [];
 
   return files;
 };
+
 
 export async function getPullRequestDiff(token:string, owner:string, repo:string, prNumber:number){
   const octokit= new Octokit({ auth: token });
@@ -256,6 +267,6 @@ await octokit.rest.issues.createComment({
   owner,
   repo,
   issue_number:prNumber,
-  body: `## 🤖 AI Code Review\n\n${review}\n\n---\n*Powered by CodeRabbit Clone*`,
+  body: `## 🤖 AI Code Review\n\n${review}\n\n---\n*Powered by me*`,
 })
 }

@@ -6,6 +6,8 @@ import { headers } from "next/headers"
 import {createWebhook, getRepositories} from "@/module/github/lib/github"
 import { inngest } from "@/inngest/client"
 
+import { canConnectRepository,decrementRepositoryCount,incrementRepositoryCount } from "@/module/payment/lib/subscription"
+
 export const fetchUserRepositories = async(page= 1, perPage=10)=>{
 const session= await auth.api.getSession({
     headers: await headers()    
@@ -34,6 +36,12 @@ export async function connectRepository(owner: string, repo: string, githubId: n
         throw new Error("User is not authenticated")
     }
     //  todo:check if user can connect more repo
+
+    const canConnect = await canConnectRepository(session.user.id);
+
+if(!canConnect){
+  throw new Error("Repository limit reached. Please upgrade to Pro for unlimited repositories.");
+}
     const webhook= await createWebhook(owner, repo);
     if(webhook){
         await prisma.repository.create({
@@ -46,8 +54,9 @@ export async function connectRepository(owner: string, repo: string, githubId: n
                 userId: session.user.id,
             }
         })
-    }
+    
     //  todo: increment repository count for usage tracking
+await incrementRepositoryCount(session.user.id)
     //  todo: trigger repositry indexing for rag(fire and forget)
     try{
         await inngest.send({
@@ -62,6 +71,7 @@ export async function connectRepository(owner: string, repo: string, githubId: n
     catch(error){
         console.error("Error sending repository.connected event to inngest:", error)
     }
+}
     // so now create a function "repository.connected"→ inside ingest fucntions→ index.ts
     return webhook
     

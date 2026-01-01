@@ -38,6 +38,7 @@ export const AppSidebar = () => {
   useEffect(() => {
     setMounted(true)
   }, [])
+  // /Users/money/Desktop/pull_request/inngest/functions/review.ts
 
   const navigationItems = [
     { title: "Dashboard", url: "/dashboard", icon: BookOpen },
