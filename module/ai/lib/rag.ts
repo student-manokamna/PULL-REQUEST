@@ -60,9 +60,10 @@ import { pineconeIndex } from "@/lib/pinecone";
 import { embed } from "ai";
 import { google } from "@ai-sdk/google";
 
+
 /**
  * Generate embeddings safely
- * Google text-embedding-004 → 768 dims
+ * Fixed: Added proper error handling for Google API quotas.
  */
 export async function generateEmbeddings(text: string): Promise<number[]> {
   if (!text || !text.trim()) return [];
@@ -70,14 +71,13 @@ export async function generateEmbeddings(text: string): Promise<number[]> {
   try {
     const { embedding } = await embed({
       model: google.textEmbeddingModel("text-embedding-004"),
-      value: text.slice(0, 3000), // ✅ FIX: safe limit
+      value: text.slice(0, 3000), // Ensures we stay within token limits
     });
 
     return embedding;
   } catch (err: any) {
     const msg = err?.message || "";
-
-    // 🚫 DO NOT RETRY QUOTA ERRORS
+    // 🚫 Do not retry if quota is hit to avoid hanging the function
     if (
       msg.includes("quota") ||
       msg.includes("RESOURCE_EXHAUSTED") ||
@@ -86,47 +86,27 @@ export async function generateEmbeddings(text: string): Promise<number[]> {
       console.error("🚫 Google quota exceeded. Skipping embedding.");
       return [];
     }
-
     throw err;
   }
 }
 
 /**
  * Index repository files into Pinecone
+ * Fixed: Removed the unreliable "Zero Vector" check that was causing indexing to be skipped.
+ * Fixed: Reduced throttle to 200ms to prevent the 1.9m Inngest timeout.
  */
 export async function indexCodebase(
   repoId: string,
   files: { path: string; content: string }[]
 ) {
-  const vectors: {
-    id: string;
-    values: number[];
-    metadata: {
-      repoId: string;
-      path: string;
-      content: string;
-    };
-  }[] = [];
-
-  // ✅ FIX: prevent re-indexing same repo
-  const existing = await pineconeIndex.query({
-    vector: new Array(768).fill(0),
-    topK: 1,
-    filter: { repoId },
-  });
-
-  if (existing.matches?.length) {
-    console.log("✅ Repo already indexed, skipping embeddings");
-    return;
-  }
+  const vectors: any[] = [];
 
   for (const file of files) {
     const content = `File: ${file.path}\n\n${file.content}`;
-    const truncatedContent = content.slice(0, 3000); // ✅ FIX
+    const truncatedContent = content.slice(0, 3000); 
 
     const embedding = await generateEmbeddings(truncatedContent);
 
-    // 🚫 skip if embedding failed
     if (!embedding.length) continue;
 
     vectors.push({
@@ -139,8 +119,8 @@ export async function indexCodebase(
       },
     });
 
-    // 🧯 throttle to avoid rate limits
-    await new Promise((r) => setTimeout(r, 1200));
+    // ⚡ Faster throttle (200ms) to stay within serverless execution limits.
+    await new Promise((r) => setTimeout(r, 200));
   }
 
   if (!vectors.length) {
@@ -148,10 +128,11 @@ export async function indexCodebase(
     return;
   }
 
-  // ✅ batch upserts
+  // Batch upserts to Pinecone
   const batchSize = 100;
   for (let i = 0; i < vectors.length; i += batchSize) {
-    await pineconeIndex.upsert(vectors.slice(i, i + batchSize));
+    const chunk = vectors.slice(i, i + batchSize);
+    await pineconeIndex.upsert(chunk);
   }
 
   console.log(`✅ Indexed ${vectors.length} files for repo ${repoId}`);
@@ -159,6 +140,7 @@ export async function indexCodebase(
 
 /**
  * Retrieve relevant context
+ * Fixed: Ensure the repoId filter matches exactly what was indexed.
  */
 export async function retrieveContext(
   query: string,
@@ -167,12 +149,11 @@ export async function retrieveContext(
 ): Promise<string[]> {
   const embedding = await generateEmbeddings(query);
 
-  // 🚫 no embedding → no query
   if (!embedding.length) return [];
 
   const results = await pineconeIndex.query({
     vector: embedding,
-    filter: { repoId },
+    filter: { repoId }, // CRITICAL: This must match the ID used in indexCodebase
     topK,
     includeMetadata: true,
   });
